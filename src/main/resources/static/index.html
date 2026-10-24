@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WebDAV 媒体库</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">📁 WebDAV 媒体库</div>
+    <div class="topbar-actions">
+      <select id="sourceSelect" class="select" aria-label="选择 WebDAV 源"></select>
+      <button id="manageBtn" class="btn btn-primary" type="button">管理源</button>
+      <button id="logoutBtn" class="btn" type="button">退出</button>
+    </div>
+  </div>
+</header>
+
+<div class="breadcrumb-bar">
+  <nav id="breadcrumb" class="breadcrumb" aria-label="目录路径"></nav>
+  <span id="statText" class="stat"></span>
+</div>
+
+<div class="toolbar" id="toolbar">
+  <div class="search-box">
+    <span class="search-icon">🔍</span>
+    <input id="searchInput" type="search" placeholder="搜索当前目录及子目录…" autocomplete="off">
+    <button id="searchClear" class="icon-btn search-clear hidden" type="button" aria-label="清空搜索">✕</button>
+  </div>
+  <select id="sortSelect" class="select select-small" aria-label="排序方式">
+    <option value="name_asc">名称 ↑</option>
+    <option value="name_desc">名称 ↓</option>
+    <option value="time_asc">时间 ↑</option>
+    <option value="time_desc">时间 ↓</option>
+  </select>
+</div>
+
+<button id="fabUp" class="fab hidden" type="button" aria-label="返回上级目录" title="返回上级目录">↑</button>
+
+<main class="main">
+  <div id="emptyState" class="empty hidden">
+    <div class="empty-icon">🗂️</div>
+    <p>还没有添加 WebDAV 源</p>
+    <button class="btn btn-primary" id="emptyAddBtn" type="button">添加第一个源</button>
+  </div>
+  <div id="loading" class="loading hidden"><span class="spinner"></span>加载中…</div>
+  <div id="errorBar" class="error hidden"></div>
+  <div id="grid" class="grid"></div>
+</main>
+
+<!-- 管理源弹窗 -->
+<div id="sourceModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-dialog">
+    <div class="modal-header">
+      <h3>管理 WebDAV 源</h3>
+      <button class="icon-btn modal-close" data-close="sourceModal" type="button" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <ul id="sourceList" class="source-list"></ul>
+      <form id="sourceForm" class="source-form">
+        <input type="hidden" id="editingId" value="">
+        <div class="form-title" id="formTitle">添加源</div>
+        <label class="field"><span>名称</span>
+          <input id="f_name" type="text" placeholder="如：家庭云盘" maxlength="100" required>
+        </label>
+        <label class="field"><span>服务器地址</span>
+          <input id="f_serverUrl" type="url" placeholder="http://host:port/dav" required>
+        </label>
+        <label class="field"><span>用户名</span>
+          <input id="f_username" type="text" placeholder="可留空" autocomplete="off">
+        </label>
+        <label class="field"><span>密码</span>
+          <input id="f_password" type="password" placeholder="编辑时留空表示不修改" autocomplete="new-password">
+        </label>
+        <label class="checkbox"><input id="f_enabled" type="checkbox" checked> 启用</label>
+        <div class="form-actions">
+          <button type="button" class="btn" id="testBtn">测试连接</button>
+          <button type="submit" class="btn btn-primary">保存</button>
+          <button type="button" class="btn hidden" id="cancelEditBtn">取消编辑</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- 视频播放弹窗 -->
+<div id="videoModal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-dialog video-dialog">
+    <div class="modal-header">
+      <h3 id="videoTitle">视频</h3>
+      <button class="icon-btn modal-close" data-close="videoModal" type="button" aria-label="关闭">✕</button>
+    </div>
+    <div class="video-wrap">
+      <video id="videoPlayer" controls playsinline preload="metadata"></video>
+    </div>
+  </div>
+</div>
+
+<!-- 图片查看器：所有图片上下平铺，滚动/滑动查看，懒加载 -->
+<div id="viewer" class="viewer hidden" role="dialog" aria-modal="true">
+  <button class="icon-btn viewer-close" id="viewerClose" type="button" aria-label="关闭">✕</button>
+  <div id="viewerStrip" class="viewer-strip"></div>
+  <button class="lb-nav lb-prev" id="viewerPrev" type="button" aria-label="上一张">‹</button>
+  <button class="lb-nav lb-next" id="viewerNext" type="button" aria-label="下一张">›</button>
+  <div id="viewerCaption" class="lb-caption"></div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="js/app.js"></script>
+</body>
+</html>

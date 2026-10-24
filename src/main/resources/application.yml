@@ -1,0 +1,33 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: webdav-gallery
+  datasource:
+    # H2 文件模式，数据目录可用环境变量 H2_DATA_DIR 覆盖（Docker 中为 /app/data）
+    url: jdbc:h2:file:${H2_DATA_DIR:./data}/webdav;MODE=MySQL;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+
+webdav:
+  # WebDAV 密码加密密钥素材，生产环境请修改
+  secret: "webdav-gallery-default-secret-please-change"
+
+app:
+  auth:
+    # 登录账号密码（请修改默认值）
+    username: admin
+    password: admin123
+

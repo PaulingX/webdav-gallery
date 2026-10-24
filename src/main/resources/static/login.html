@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>登录 - WebDAV 媒体库</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="login-body">
+  <div class="login-card">
+    <div class="login-brand">📁 WebDAV 媒体库</div>
+    <form id="loginForm">
+      <label class="field"><span>用户名</span>
+        <input id="loginUsername" type="text" autocomplete="username" required>
+      </label>
+      <label class="field"><span>密码</span>
+        <input id="loginPassword" type="password" autocomplete="current-password" required>
+      </label>
+      <div id="loginError" class="login-error hidden"></div>
+      <button type="submit" class="btn btn-primary login-btn" id="loginBtn">登 录</button>
+    </form>
+  </div>
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('loginBtn');
+      const err = document.getElementById('loginError');
+      btn.disabled = true;
+      btn.textContent = '登录中…';
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('loginUsername').value.trim(),
+            password: document.getElementById('loginPassword').value,
+          }),
+        });
+        const json = await res.json();
+        if (json.code === 0) {
+          location.href = '/';
+          return;
+        }
+        err.textContent = json.message || '登录失败';
+        err.classList.remove('hidden');
+      } catch (ex) {
+        err.textContent = '网络请求失败';
+        err.classList.remove('hidden');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '登 录';
+      }
+    });
+    // 已登录则直接进入
+    fetch('/api/login/status').then(r => r.json()).then(j => {
+      if (j.code === 0 && j.data && j.data.loggedIn) location.href = '/';
+    }).catch(() => {});
+  </script>
+</body>
+</html>

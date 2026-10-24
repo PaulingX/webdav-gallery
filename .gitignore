@@ -1,0 +1,18 @@
+# 构建产物
+target/
+
+# 运行数据（H2 数据库文件）
+data/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 本地测试脚手架生成物
+.testserver/wdroot/
+.testserver/*.mp4
+.testserver/*.jpg
+.testserver/*.png
+.testserver/*.json
+.testserver/*.log
