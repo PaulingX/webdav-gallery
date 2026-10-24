@@ -1,6 +1,7 @@
 package com.example.webdavgallery.service;
 
 import com.example.webdavgallery.dto.FileInfo;
+import com.example.webdavgallery.dto.PageResult;
 import com.example.webdavgallery.entity.WebDavResource;
 import com.example.webdavgallery.entity.WebDavSource;
 import com.example.webdavgallery.exception.BusinessException;
@@ -88,8 +89,11 @@ public class WebDavClientService {
 
     /* ---------------- 目录列表（读库 + 懒同步） ---------------- */
 
-    /** 列出目录：优先读缓存；目录从未拉取过时实时 PROPFIND 一次并入库 */
-    public List<FileInfo> list(WebDavSource source, String rawPath) {
+    /**
+     * 列出目录（读库 + 懒同步），排序与分页在后端完成（前端无限滚动）。
+     * sort: name_asc/name_desc/time_asc/time_desc；目录始终排在文件前。
+     */
+    public PageResult<FileInfo> list(WebDavSource source, String rawPath, String sort, int offset, int limit) {
         String dirPath = normalizePath(rawPath);
         ensureDirSynced(source, dirPath);
         List<WebDavResource> rows = resourceService.findByParent(source.getId(), dirPath);
@@ -97,9 +101,43 @@ public class WebDavClientService {
         for (WebDavResource row : rows) {
             files.add(toFileInfo(row));
         }
-        files.sort(Comparator.comparing((FileInfo f) -> !f.isDir())
-                .thenComparing(f -> f.getName().toLowerCase()));
-        return files;
+        Comparator<FileInfo> cmp = comparatorOf(sort);
+        files.sort(Comparator.comparing((FileInfo f) -> !f.isDir()).thenComparing(cmp));
+        int from = Math.max(0, offset);
+        int to = Math.min(files.size(), from + Math.max(1, limit));
+        List<FileInfo> page = from < files.size() ? files.subList(from, to) : List.of();
+        return new PageResult<>(page, to < files.size(), files.size());
+    }
+
+    private Comparator<FileInfo> comparatorOf(String sort) {
+        boolean desc = sort != null && sort.endsWith("desc");
+        Comparator<FileInfo> base = sort != null && sort.startsWith("time")
+                ? Comparator.comparingLong(FileInfo::getLastModified)
+                : Comparator.comparing(f -> f.getName().toLowerCase(), WebDavClientService::naturalCompare);
+        return desc ? base.reversed() : base;
+    }
+
+    /** 名称自然排序比较：数字段按数值（1 < 2 < 10），其余按字符（忽略大小写） */
+    static int naturalCompare(String a, String b) {
+        int ia = 0, ib = 0;
+        while (ia < a.length() && ib < b.length()) {
+            char ca = a.charAt(ia), cb = b.charAt(ib);
+            if (Character.isDigit(ca) && Character.isDigit(cb)) {
+                int ja = ia, jb = ib;
+                while (ja < a.length() && Character.isDigit(a.charAt(ja))) ja++;
+                while (jb < b.length() && Character.isDigit(b.charAt(jb))) jb++;
+                java.math.BigInteger na = new java.math.BigInteger(a.substring(ia, ja));
+                java.math.BigInteger nb = new java.math.BigInteger(b.substring(ib, jb));
+                int c = na.compareTo(nb);
+                if (c != 0) return c;
+                ia = ja; ib = jb;
+            } else {
+                int c = Character.compare(Character.toLowerCase(ca), Character.toLowerCase(cb));
+                if (c != 0) return c;
+                ia++; ib++;
+            }
+        }
+        return Integer.compare(a.length() - ia, b.length() - ib);
     }
 
     /** 目录未同步（或全量同步未覆盖到）时实时拉取一次该目录并入库 */
@@ -165,7 +203,7 @@ public class WebDavClientService {
         }
         List<FileInfo> files;
         try {
-            files = list(source, path);
+            files = list(source, path, "name_asc", 0, Integer.MAX_VALUE).getItems();
         } catch (RuntimeException e) {
             return null;
         }

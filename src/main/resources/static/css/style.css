@@ -213,6 +213,13 @@ button { font-family: inherit; }
   font-size: 13px; margin-bottom: 12px;
 }
 
+/* ---------- 无限滚动哨兵 ---------- */
+.grid-sentinel, .viewer-sentinel {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  padding: 22px 0; color: var(--muted); font-size: 13px;
+}
+.viewer-sentinel { color: rgba(255, 255, 255, .6); }
+
 /* ---------- 提示 ---------- */
 .toast {
   position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 100;

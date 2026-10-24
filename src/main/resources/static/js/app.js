@@ -6,12 +6,14 @@ const state = {
   sources: [],
   sourceId: null,
   path: '/',
-  items: [],
-  images: [],       // 当前视图（浏览或搜索结果）中的图片，按展示顺序，供查看器使用
+  items: [],        // 已加载的条目（分页累积）
+  total: 0,         // 后端返回的目录总条数
+  images: [],       // 已加载的图片（按展示顺序），供查看器使用
   editingId: null,
   searching: false, // 是否处于搜索结果视图
   keyword: '',
   sort: localStorage.getItem('wg_sort') || 'name_asc',
+  page: { offset: 0, limit: 100, hasMore: false, loading: false },
 };
 
 /* ---------------- 基础工具 ---------------- */
@@ -98,18 +100,61 @@ function hide(el) { el.classList.add('hidden'); }
 const scrollMemory = new Map();
 const memKey = (id, path) => id + '|' + path;
 
-/** 名称自然排序：1、2、10（数字按数值比较） */
-const nameCollator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+/* ---------------- 分页（无限滚动） ---------------- */
 
-/** 排序：目录始终在前，组内按名称或时间正/反序。mode 为空时子目录固定名称正序 */
-function sortItems(items, mode) {
-  const sorted = items.slice();
-  const byName = (a, b) => nameCollator.compare(a.name, b.name);
-  const byTime = (a, b) => a.lastModified - b.lastModified;
-  const cmp = mode.startsWith('time') ? byTime : byName;
-  const reversed = mode.endsWith('desc') ? -1 : 1;
-  sorted.sort((a, b) => (a.dir === b.dir ? cmp(a, b) * reversed : (a.dir ? -1 : 1)));
-  return sorted;
+/** 根目录用用户选择的排序，子目录固定名称自然排序（后端执行，保证分页顺序正确） */
+function currentSortParam() {
+  return state.path === '/' ? state.sort : 'name_asc';
+}
+
+/** 拉取下一页并增量渲染；返回是否成功 */
+async function loadPage() {
+  if (state.page.loading) return false;
+  state.page.loading = true;
+  const first = state.page.offset === 0;
+  try {
+    const data = await api(`/api/sources/${state.sourceId}/list?path=${encodeURIComponent(state.path)}`
+      + `&sort=${currentSortParam()}&offset=${state.page.offset}&limit=${state.page.limit}`);
+    state.page.offset += (data.items || []).length;
+    state.page.hasMore = !!data.hasMore;
+    state.total = data.total || 0;
+    if (first) hide($('#loading'));
+    appendItems(data.items || []);
+    updateGridSentinel();
+    updateViewerSentinel();
+    return true;
+  } catch (e) {
+    if (first) hide($('#loading'));
+    $('#errorBar').textContent = e.message;
+    show($('#errorBar'));
+    return false;
+  } finally {
+    state.page.loading = false;
+  }
+}
+
+/** 无限滚动哨兵：进入视口附近时加载下一页 */
+let gridSentinel = null;
+let gridObserver = null;
+
+function updateGridSentinel() {
+  if (!gridSentinel) return;
+  gridSentinel.classList.toggle('hidden', !state.page.hasMore || state.searching);
+}
+
+function ensureGridSentinel() {
+  if (gridSentinel && document.contains(gridSentinel)) return;
+  gridSentinel = document.createElement('div');
+  gridSentinel.id = 'gridSentinel';
+  gridSentinel.className = 'grid-sentinel hidden';
+  gridSentinel.innerHTML = '<span class="spinner"></span><span>加载更多…</span>';
+  document.querySelector('.main').appendChild(gridSentinel);
+  gridObserver = new IntersectionObserver((entries) => {
+    if (entries.some((en) => en.isIntersecting) && state.page.hasMore && !state.searching) {
+      loadPage();
+    }
+  }, { rootMargin: '800px 0px' });
+  gridObserver.observe(gridSentinel);
 }
 
 /** 搜索与排序仅在根目录（第一层）提供，子目录固定按名称自然排序 */
@@ -208,29 +253,32 @@ async function browse(path) {
   if (!state.sourceId) return;
   // 记住当前目录滚动位置，返回时恢复
   scrollMemory.set(memKey(state.sourceId, state.path), window.scrollY);
+  const saved = scrollMemory.get(memKey(state.sourceId, path));
   show($('#loading'));
   hide($('#errorBar'));
   $('#grid').innerHTML = '';
   $('#statText').textContent = '';
+  state.path = path;
+  state.searching = false;
+  state.keyword = '';
+  state.items = [];
+  state.images = [];
+  state.total = 0;
+  state.page = { offset: 0, limit: 100, hasMore: false, loading: false };
+  renderBreadcrumb();
+  updateToolbar();
   try {
-    const items = await api(`/api/sources/${state.sourceId}/list?path=${encodeURIComponent(path)}`);
-    state.path = path;
-    state.items = items || [];
-    state.searching = false;
-    state.keyword = '';
-    // 先移除 loading 块再渲染与恢复滚动，避免上方内容塌缩导致滚动锚定偏移
-    hide($('#loading'));
-    renderBreadcrumb();
-    updateToolbar();
-    renderGrid();
-    const saved = scrollMemory.get(memKey(state.sourceId, path));
+    const ok = await loadPage();
+    if (ok && saved > 0) {
+      // 恢复较靠下的位置需要先加载足够多的页（每页渲染后高度增长）
+      let guard = 0;
+      while (state.page.hasMore
+        && document.documentElement.scrollHeight < saved + window.innerHeight
+        && guard++ < 80) {
+        if (!(await loadPage())) break;
+      }
+    }
     window.scrollTo({ top: saved == null ? 0 : saved });
-  } catch (e) {
-    hide($('#loading'));
-    $('#errorBar').textContent = e.message;
-    show($('#errorBar'));
-    $('#breadcrumb').innerHTML = '';
-    updateToolbar();
   } finally {
     updateFab();
   }
@@ -258,13 +306,17 @@ async function runSearch(kw) {
   try {
     const results = await api(
       `/api/sources/${state.sourceId}/search?path=${encodeURIComponent(state.path)}&keyword=${encodeURIComponent(kw)}`);
+    hide($('#loading'));
     state.searching = true;
     state.keyword = kw;
-    state.items = results || [];
-    hide($('#loading'));
+    state.items = [];
+    state.images = [];
+    state.total = 0;
+    state.page = { offset: (results || []).length, limit: 100, hasMore: false, loading: false };
     renderBreadcrumb();
     updateToolbar();
-    renderGrid();
+    appendItems(results || []);
+    updateGridSentinel();
     window.scrollTo({ top: 0 });
   } catch (e) {
     hide($('#loading'));
@@ -276,9 +328,18 @@ async function runSearch(kw) {
 }
 
 function exitSearch() {
+  clearSearchBox();
+  browse(state.path);
+}
+
+/** 清空搜索框并退出搜索态（不触发重新加载） */
+function clearSearchBox() {
   $('#searchInput').value = '';
   $('#searchClear').classList.add('hidden');
-  browse(state.path);
+  if (state.searching) {
+    state.searching = false;
+    state.keyword = '';
+  }
 }
 
 function renderBreadcrumb() {
@@ -290,8 +351,8 @@ function renderBreadcrumb() {
     b.className = 'crumb';
     b.textContent = label;
     b.addEventListener('click', () => {
-      if (state.searching) exitSearch();
-      else browse(path);
+      clearSearchBox();
+      browse(path);
     });
     return b;
   };
@@ -321,46 +382,51 @@ function renderBreadcrumb() {
 
 /* ---------------- 网格渲染 ---------------- */
 
-function renderGrid() {
-  const grid = $('#grid');
-  grid.innerHTML = '';
-  // 根目录按用户选择的排序；子目录固定名称自然排序（1、2、3…）
-  const mode = state.path === '/' ? state.sort : 'name_asc';
-  const items = sortItems(state.items, mode);
-  const dirs = items.filter((i) => i.dir);
-  const files = items.filter((i) => !i.dir);
-  const images = files.filter((i) => i.mediaType === 'image');
-  const videos = files.filter((i) => i.mediaType === 'video');
+/* ---------------- 网格渲染（增量分页，顺序与后端一致：目录在前） ---------------- */
+
+/** 追加一批条目到网格（每页调用）；同名图片配对视频封面逻辑对每页增量计算 */
+function appendItems(items) {
+  if (!items || !items.length) {
+    updateStat();
+    return;
+  }
+  state.items = state.items.concat(items);
+  const images = items.filter((i) => !i.dir && i.mediaType === 'image');
+  const videos = items.filter((i) => !i.dir && i.mediaType === 'video');
 
   // 同目录下同名图片作为视频封面：movie.mp4 + movie.jpg → 视频用图片做预览，图片不再单独展示
   const imgByBase = new Map();
   for (const im of images) imgByBase.set(dirOf(im.path) + '|' + baseName(im.name), im);
-  const paired = new Set();
   const posters = new Map();
   for (const v of videos) {
     const im = imgByBase.get(dirOf(v.path) + '|' + baseName(v.name));
-    if (im) {
-      posters.set(v.path, im);
-      paired.add(im.path);
-    }
+    if (im) posters.set(v.path, im);
   }
+  const paired = new Set(Array.from(posters.values()).map((i) => i.path));
   const shownImages = images.filter((i) => !paired.has(i.path));
-  state.images = shownImages;
+  state.images = state.images.concat(shownImages);
 
+  const grid = $('#grid');
   const frag = document.createDocumentFragment();
-  for (const item of dirs) frag.appendChild(dirCard(item));
-  for (const item of shownImages) frag.appendChild(imageCard(item));
-  for (const item of videos) frag.appendChild(videoCard(item, posters.get(item.path)));
-  for (const item of files) {
-    if (item.mediaType === 'other') frag.appendChild(fileCard(item));
+  for (const item of items) {
+    if (item.dir) frag.appendChild(dirCard(item));
+    else if (item.mediaType === 'image' && !paired.has(item.path)) frag.appendChild(imageCard(item));
+    else if (item.mediaType === 'video') frag.appendChild(videoCard(item, posters.get(item.path)));
+    else if (item.mediaType === 'other') frag.appendChild(fileCard(item));
   }
   grid.appendChild(frag);
 
+  // 查看器打开中（触底加载更多图片）时同步追加
+  appendToViewer(shownImages);
+  updateStat();
+}
+
+function updateStat() {
   $('#statText').textContent = state.searching
-    ? `找到 ${items.length} 项`
-    : (state.items.length
-      ? `${dirs.length} 个文件夹 · ${shownImages.length} 张图片 · ${videos.length} 个视频 · ${files.length - shownImages.length - videos.length} 个文件`
-      : '空目录');
+    ? `找到 ${state.items.length} 项`
+    : (state.total > state.items.length
+      ? `已加载 ${state.items.length} / ${state.total} 项`
+      : (state.items.length ? `${state.items.length} 项` : '空目录'));
 }
 
 function dirCard(item) {
@@ -375,7 +441,7 @@ function dirCard(item) {
   // 目录（含递归子目录）没有图片（预览接口 404）时移除图片，仅显示文件夹图标
   div.querySelector('img').addEventListener('error', (e) => e.target.remove());
   div.addEventListener('click', () => {
-    if (state.searching) exitSearch();
+    clearSearchBox();
     browse(item.path);
   });
   return div;
@@ -434,19 +500,19 @@ function updateFab() {
   else hide(fab);
 }
 
-/* ---------------- 图片查看器（拼接长图，IntersectionObserver 懒加载） ---------------- */
+/* ---------------- 图片查看器（拼接长图，懒加载 + 触底加载更多页） ---------------- */
 
 let viewerIndex = 0;
 let viewerObserver = null;
-
-/** 占位高度：未加载图片时保持间隔，避免所有图片挤进懒加载视口范围 */
-const VIEWER_PLACEHOLDER_VH = 65;
+let viewerSentinel = null;
+let viewerSentinelObserver = null;
 
 function openViewer(index) {
   if (!state.images.length) return;
   const strip = $('#viewerStrip');
   strip.innerHTML = '';
   if (viewerObserver) viewerObserver.disconnect();
+  if (viewerSentinelObserver) viewerSentinelObserver.disconnect();
 
   // 进入视口附近才创建 <img> 并真正加载，其余保持占位，绝不一次性全量加载
   viewerObserver = new IntersectionObserver((entries) => {
@@ -463,14 +529,23 @@ function openViewer(index) {
     }
   }, { root: strip, rootMargin: '1200px 0px' });
 
-  state.images.forEach((im) => {
-    const item = document.createElement('div');
-    item.className = 'viewer-item placeholder';
-    item.dataset.src = rawUrl(state.sourceId, im.path);
-    item.dataset.name = im.name;
-    viewerObserver.observe(item);
-    strip.appendChild(item);
-  });
+  // 触底哨兵：滚动到末尾附近时加载下一页图片并追加
+  viewerSentinel = document.createElement('div');
+  viewerSentinel.className = 'viewer-sentinel hidden';
+  viewerSentinel.innerHTML = '<span class="spinner"></span><span>加载更多…</span>';
+  viewerSentinelObserver = new IntersectionObserver((entries) => {
+    if (entries.some((en) => en.isIntersecting)
+      && state.page.hasMore && !state.searching && !state.page.loading) {
+      loadPage();
+    }
+  }, { root: strip, rootMargin: '1500px 0px' });
+  viewerSentinelObserver.observe(viewerSentinel);
+
+  for (const im of state.images) {
+    strip.appendChild(buildViewerItem(im));
+  }
+  strip.appendChild(viewerSentinel);
+  updateViewerSentinel();
 
   show($('#viewer'));
   viewerIndex = Math.max(0, Math.min(index, state.images.length - 1));
@@ -478,6 +553,32 @@ function openViewer(index) {
   const target = strip.children[viewerIndex];
   if (target) strip.scrollTo({ top: target.offsetTop, behavior: 'auto' });
   updateViewerCaption();
+}
+
+function buildViewerItem(im) {
+  const item = document.createElement('div');
+  item.className = 'viewer-item placeholder';
+  item.dataset.src = rawUrl(state.sourceId, im.path);
+  item.dataset.name = im.name;
+  viewerObserver.observe(item);
+  return item;
+}
+
+/** 新一页图片到达时（查看器打开中）在哨兵前追加 */
+function appendToViewer(newImages) {
+  if (!newImages || !newImages.length) return;
+  const strip = $('#viewerStrip');
+  if (!strip || $('#viewer').classList.contains('hidden') || !viewerSentinel) return;
+  for (const im of newImages) {
+    strip.insertBefore(buildViewerItem(im), viewerSentinel);
+  }
+  updateViewerCaption();
+}
+
+function updateViewerSentinel() {
+  if (viewerSentinel) {
+    viewerSentinel.classList.toggle('hidden', !state.page.hasMore || state.searching);
+  }
 }
 
 function viewerStep(delta) {
@@ -494,6 +595,8 @@ function updateViewerCaption() {
 
 function closeViewer() {
   if (viewerObserver) viewerObserver.disconnect();
+  if (viewerSentinelObserver) viewerSentinelObserver.disconnect();
+  viewerSentinel = null;
   $('#viewerStrip').innerHTML = '';
   hide($('#viewer'));
 }
@@ -684,13 +787,13 @@ function bindEvents() {
   $('#searchInput').addEventListener('input', onSearchInput);
   $('#searchClear').addEventListener('click', exitSearch);
 
-  // 排序
+  // 排序（后端分页排序，切换后重新拉取第一页）
   const sortSelect = $('#sortSelect');
   sortSelect.value = state.sort;
   sortSelect.addEventListener('change', () => {
     state.sort = sortSelect.value;
     localStorage.setItem('wg_sort', state.sort);
-    renderGrid();
+    if (state.path === '/') browse('/');
   });
 
   // 悬浮返回上级
@@ -741,6 +844,7 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  ensureGridSentinel();
   try {
     await loadSources();
   } catch (e) {

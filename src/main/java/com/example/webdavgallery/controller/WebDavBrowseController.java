@@ -2,6 +2,7 @@ package com.example.webdavgallery.controller;
 
 import com.example.webdavgallery.dto.ApiResponse;
 import com.example.webdavgallery.dto.FileInfo;
+import com.example.webdavgallery.dto.PageResult;
 import com.example.webdavgallery.entity.WebDavSource;
 import com.example.webdavgallery.service.WebDavClientService;
 import com.example.webdavgallery.service.WebDavSourceService;
@@ -37,10 +38,16 @@ public class WebDavBrowseController {
         this.clientService = clientService;
     }
 
+    /** 分页列目录：sort 为 name_asc/name_desc/time_asc/time_desc，默认每页 100 条（前端无限滚动） */
     @GetMapping("/list")
-    public ApiResponse<List<FileInfo>> list(@PathVariable Long id, @RequestParam(defaultValue = "/") String path) {
+    public ApiResponse<PageResult<FileInfo>> list(@PathVariable Long id,
+                                                  @RequestParam(defaultValue = "/") String path,
+                                                  @RequestParam(defaultValue = "name_asc") String sort,
+                                                  @RequestParam(defaultValue = "0") int offset,
+                                                  @RequestParam(defaultValue = "100") int limit) {
         WebDavSource source = sourceService.getRequiredWithPlainPassword(id);
-        return ApiResponse.ok(clientService.list(source, path));
+        int safeLimit = Math.min(Math.max(limit, 1), 300);
+        return ApiResponse.ok(clientService.list(source, path, sort, offset, safeLimit));
     }
 
     /** 递归搜索 path 目录及子目录中文件名包含关键字的条目 */
