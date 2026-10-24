@@ -1,5 +1,7 @@
-# 构建产物
-target/
+# 构建产物（保留最终 jar，供 Docker.fast 直接 COPY）
+# 注意：必须写 target/* 而不是 target/，忽略目录本身时 ! 例外不生效
+target/*
+!target/webdav-gallery-1.0.0.jar
 
 # 运行数据（H2 数据库文件）
 data/
