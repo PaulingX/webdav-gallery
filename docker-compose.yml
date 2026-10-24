@@ -1,13 +1,20 @@
 services:
   webdav-gallery:
-    build: .
+    build:
+      context: .
+      # 默认快速模式（需先 mvn -B -DskipTests package，只需拉 ~60MB JRE）
+      # 无本地 JDK/Maven 时改用多阶段: DOCKERFILE=Dockerfile docker compose up -d --build
+      dockerfile: ${DOCKERFILE:-Dockerfile.fast}
     container_name: webdav-gallery
     ports:
-      - "8080:8080"
+      - "${APP_PORT:-8080}:8080"
     environment:
       H2_DATA_DIR: /app/data
       TZ: Asia/Shanghai
       JAVA_OPTS: "-Xms128m -Xmx512m"
+      # 登录账号密码（也可在 .env 中配置）
+      APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-admin}
+      APP_AUTH_PASSWORD: ${APP_AUTH_PASSWORD:-admin123}
     volumes:
       - ./data:/app/data   # H2 数据持久化，重建容器不丢源配置
     restart: unless-stopped

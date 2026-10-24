@@ -1,7 +1,14 @@
-target/
+# 排除 target 下除 jar 外的构建中间产物（本地 jar 构建模式需要 jar 进入构建上下文）
+target/*
+!target/webdav-gallery-1.0.0.jar
+
+# 运行数据（H2 数据库文件）
 data/
-.git/
+
+# IDE
 .idea/
 *.iml
-README.md
-docker-compose.yml
+.vscode/
+
+# 本地测试脚手架生成物
+.testserver/

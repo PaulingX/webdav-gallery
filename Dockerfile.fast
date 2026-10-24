@@ -1,0 +1,15 @@
+# 快速构建模式：使用本地已构建的 jar，只需拉取 ~60MB 的 alpine JRE，无需 maven 镜像
+# 步骤: mvn -B -DskipTests package && docker build -f Dockerfile.fast -t webdav-gallery .
+FROM eclipse-temurin:17-jre-alpine
+
+RUN apk add --no-cache tzdata
+
+WORKDIR /app
+ENV TZ=Asia/Shanghai \
+    H2_DATA_DIR=/app/data \
+    JAVA_OPTS=""
+
+COPY target/webdav-gallery-1.0.0.jar app.jar
+
+EXPOSE 8080
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

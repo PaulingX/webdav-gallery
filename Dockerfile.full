@@ -1,0 +1,19 @@
+# 完整多阶段构建：无需本地 JDK/Maven，但需拉取 ~500MB 的 maven 基础镜像并在容器内下载依赖
+# 使用: docker build -f Dockerfile.full -t webdav-gallery .
+FROM maven:3.9-eclipse-temurin-17 AS build
+WORKDIR /build
+COPY pom.xml .
+# 先单独拷贝 pom 下载依赖，源码变更时利用层缓存
+RUN mvn -B -q dependency:go-offline
+COPY src ./src
+RUN mvn -B -q -DskipTests package
+
+FROM eclipse-temurin:17-jre-alpine
+RUN apk add --no-cache tzdata
+WORKDIR /app
+ENV TZ=Asia/Shanghai \
+    H2_DATA_DIR=/app/data \
+    JAVA_OPTS=""
+COPY --from=build /build/target/*.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

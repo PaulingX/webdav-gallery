@@ -13,17 +13,41 @@
 - **搜索与排序**：根目录提供递归搜索与名称/时间正反排序；子目录固定按名称自然排序（1、2、10）
 - **移动端**：响应式布局，手机浏览器直接访问使用
 
-## Docker 部署（推荐）
+## Docker 部署
+
+### 方式一：快速构建（推荐，约 20 秒）
+
+本机有 JDK17 + Maven 时，先用本地 jar 构建（只拉取约 60MB 的 alpine JRE 镜像）：
 
 ```bash
+mvn -B -DskipTests package
 docker compose up -d --build
 ```
 
-访问 `http://<服务器IP>:8080`，手机浏览器访问同一地址即可。
+### 方式二：多阶段构建（无需本地 JDK/Maven）
 
-- H2 数据持久化在宿主机 `./data/` 目录，重建容器不丢配置
-- 升级版本：拉取新代码后重新执行 `docker compose up -d --build`
-- WebDAV 服务器若跑在宿主机上，源地址填 `http://host.docker.internal:端口/路径`
+会拉取约 500MB 的 maven 基础镜像并在容器内编译，首次较慢：
+
+```bash
+DOCKERFILE=Dockerfile docker compose up -d --build
+```
+
+### 自定义端口与登录账号密码
+
+compose 支持环境变量（命令行传入，或复制 `.env.example` 为 `.env` 修改后直接 `docker compose up -d --build`）：
+
+```bash
+APP_PORT=9090 APP_AUTH_USERNAME=myuser APP_AUTH_PASSWORD=mypass docker compose up -d --build
+```
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `APP_PORT` | `8080` | 宿主机访问端口 |
+| `APP_AUTH_USERNAME` | `admin` | 登录用户名 |
+| `APP_AUTH_PASSWORD` | `admin123` | 登录密码 |
+| `DOCKERFILE` | `Dockerfile.fast` | 构建用 Dockerfile（`Dockerfile` 为多阶段） |
+
+访问 `http://<服务器IP>:$APP_PORT`，手机浏览器访问同一地址即可。H2 数据持久化在宿主机 `./data/`；WebDAV 服务器若跑在宿主机上，源地址填 `http://host.docker.internal:端口/路径`。
 
 ## 本地开发
 
@@ -39,8 +63,10 @@ mvn spring-boot:run
 |---|---|---|
 | `H2_DATA_DIR` | `./data` | H2 数据文件目录 |
 | `JAVA_OPTS` | 空 | JVM 参数（Docker 镜像内，如 `-Xmx512m`） |
+| `APP_AUTH_USERNAME` | `admin` | 登录用户名（覆盖 yml） |
+| `APP_AUTH_PASSWORD` | `admin123` | 登录密码（覆盖 yml） |
 
-- 登录账号密码在 `src/main/resources/application.yml` 的 `app.auth`（默认 admin/admin123），生产环境务必修改
+- 登录账号密码优先级：环境变量 `APP_AUTH_USERNAME/PASSWORD` > `application.yml` 的 `app.auth`
 - WebDAV 密码的 AES 加密密钥在 `webdav.secret`，生产环境建议修改
 
 ## 已知边界

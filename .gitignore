@@ -4,6 +4,9 @@ target/
 # 运行数据（H2 数据库文件）
 data/
 
+# 环境配置（含密码）
+.env
+
 # IDE
 .idea/
 *.iml
