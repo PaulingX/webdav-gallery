@@ -169,8 +169,13 @@ button { font-family: inherit; }
 
 /* ---------- 视频弹窗 ---------- */
 .video-dialog { max-width: 920px; }
-.video-wrap { background: #000; display: flex; align-items: center; justify-content: center; }
+.video-wrap { background: #000; display: flex; align-items: center; justify-content: center; position: relative; }
 .video-wrap video { width: 100%; max-height: 72vh; display: block; }
+.video-loading {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+.video-loading .spinner { width: 36px; height: 36px; border-width: 4px; }
 
 /* ---------- 图片查看器（拼接长图 + 懒加载占位） ---------- */
 .viewer { position: fixed; inset: 0; background: rgba(0, 0, 0, .97); z-index: 60; }

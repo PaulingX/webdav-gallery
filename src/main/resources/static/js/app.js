@@ -607,6 +607,7 @@ function openVideo(item, poster) {
   $('#videoTitle').textContent = item.name;
   const v = $('#videoPlayer');
   v.poster = poster ? rawUrl(state.sourceId, poster.path) : '';
+  show($('#videoLoading'));
   v.src = rawUrl(state.sourceId, item.path);
   show($('#videoModal'));
   v.play().catch(() => {});
@@ -617,7 +618,29 @@ function closeVideo() {
   v.pause();
   v.removeAttribute('src');
   v.load();
+  hide($('#videoLoading'));
   hide($('#videoModal'));
+}
+
+/** 视频缓冲/就绪/失败反馈：缓冲时转圈，失败时提示（格式不支持或网络中断） */
+function bindVideoEvents() {
+  const v = $('#videoPlayer');
+  const loading = $('#videoLoading');
+  v.addEventListener('waiting', () => show(loading));
+  v.addEventListener('playing', () => hide(loading));
+  v.addEventListener('canplay', () => hide(loading));
+  v.addEventListener('error', () => {
+    hide(loading);
+    if (v.error && v.src) {
+      const hints = {
+        1: '加载已取消',
+        2: '网络中断，请重试',
+        3: '视频解码失败，浏览器可能不支持该格式（如 MKV/AVI）',
+        4: '视频不支持或已被删除',
+      };
+      toast(hints[v.error.code] || '视频加载失败', false);
+    }
+  });
 }
 
 /* ---------------- 弹窗通用 ---------------- */
@@ -748,6 +771,7 @@ async function onDelete(id) {
 /* ---------------- 事件绑定 ---------------- */
 
 function bindEvents() {
+  bindVideoEvents();
   $('#sourceSelect').addEventListener('change', (e) => selectSource(e.target.value));
   $('#manageBtn').addEventListener('click', () => { fillForm(null); renderSourceList(); openModal('sourceModal'); });
   $('#logoutBtn').addEventListener('click', async () => {

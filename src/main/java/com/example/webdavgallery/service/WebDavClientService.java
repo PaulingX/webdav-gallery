@@ -19,20 +19,15 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -384,9 +379,10 @@ public class WebDavClientService {
 
     /**
      * 打开远端文件的流式响应（供 /raw、/preview 代理，按缓存中的路径直接取文件）。
-     * 转发浏览器的 Range 头以支持视频拖动；调用方透传响应状态与 Content-* 头。
+     * 转发浏览器的 Range / If-Range 头以支持视频拖动；调用方透传响应状态与 Content-* 头，
+     * 上游忽略 Range（对 Range 请求回 200）时由调用方本地切片返回 206。
      */
-    public HttpResponse<InputStream> openStream(WebDavSource source, String rawPath, String rangeHeader)
+    public HttpResponse<InputStream> openStream(WebDavSource source, String rawPath, String rangeHeader, String ifRangeHeader)
             throws IOException, InterruptedException {
         String url = buildUrl(source.getServerUrl(), normalizePath(rawPath), false);
         HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
@@ -399,6 +395,9 @@ public class WebDavClientService {
         }
         if (rangeHeader != null && !rangeHeader.isBlank()) {
             builder.header("Range", rangeHeader);
+        }
+        if (ifRangeHeader != null && !ifRangeHeader.isBlank()) {
+            builder.header("If-Range", ifRangeHeader);
         }
         return httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
     }

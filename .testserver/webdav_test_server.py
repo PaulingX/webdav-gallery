@@ -11,6 +11,9 @@ import urllib.parse
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'wdroot')
 USER, PASS = 'user', 'pass123'
+# IGNORE_RANGE=1 模拟不支持 Range 的上游（对 Range 请求一律回 200 全量），
+# 用于验证 webdav-gallery 代理的本地切片回退
+IGNORE_RANGE = os.environ.get('IGNORE_RANGE') == '1'
 
 TYPES = {
     '.jpg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
@@ -115,7 +118,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._empty(404)
         size = os.path.getsize(full)
         start, end, status = 0, size - 1, 200
-        rng = self.headers.get('Range')
+        rng = None if IGNORE_RANGE else self.headers.get('Range')
         if rng:
             m = re.match(r'bytes=(\d*)-(\d*)', rng.strip())
             if m:
@@ -133,6 +136,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', ext_type(os.path.basename(full)))
         self.send_header('Accept-Ranges', 'bytes')
+        if IGNORE_RANGE:
+            # 模拟 Alist WebDAV：GET 一律带 attachment 头
+            self.send_header('Content-Disposition', f'attachment; filename="{os.path.basename(full)}"')
         if status == 206:
             self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
         self.send_header('Content-Length', str(end - start + 1))

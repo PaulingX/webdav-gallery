@@ -10,11 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -62,9 +58,13 @@ public class WebDavBrowseController {
         return ApiResponse.ok(clientService.search(source, path, keyword.trim()));
     }
 
+    private static final long[] RANGE_UNSATISFIABLE = new long[0];
+
     /**
-     * 文件内容代理：转发 Range 头，透传 200/206 与 Content-* 头，
+     * 文件内容代理：转发 Range / If-Range 头，透传 200/206 与 Content-* 头，
      * 流式拷贝不落盘，图片可直接显示，视频可拖动进度条。
+     * 上游忽略 Range（对 Range 请求回 200 全量）时本地切片补回 206，
+     * 保证 moov 在文件尾部的视频也能先取尾部元数据秒开、随意拖动。
      */
     @GetMapping("/raw")
     public void raw(@PathVariable Long id, @RequestParam String path,
@@ -73,7 +73,7 @@ public class WebDavBrowseController {
         String range = request.getHeader("Range");
         HttpResponse<InputStream> upstream;
         try {
-            upstream = clientService.openStream(source, path, range);
+            upstream = clientService.openStream(source, path, range, request.getHeader("If-Range"));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             response.sendError(HttpServletResponse.SC_BAD_GATEWAY, "请求被中断");
@@ -83,7 +83,7 @@ public class WebDavBrowseController {
             response.sendError(HttpServletResponse.SC_BAD_GATEWAY, "获取文件失败: " + e.getMessage());
             return;
         }
-        writeProxy(upstream, response);
+        writeProxy(upstream, response, range);
     }
 
     /**
@@ -106,7 +106,7 @@ public class WebDavBrowseController {
         }
         HttpResponse<InputStream> upstream;
         try {
-            upstream = clientService.openStream(source, imagePath, null);
+            upstream = clientService.openStream(source, imagePath, null, null);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             response.sendError(HttpServletResponse.SC_BAD_GATEWAY, "请求被中断");
@@ -115,26 +115,68 @@ public class WebDavBrowseController {
             response.sendError(HttpServletResponse.SC_BAD_GATEWAY, "获取文件失败: " + e.getMessage());
             return;
         }
-        writeProxy(upstream, response);
+        writeProxy(upstream, response, null);
     }
 
-    private void writeProxy(HttpResponse<InputStream> upstream, HttpServletResponse response) throws IOException {
+    /**
+     * 把上游响应写回客户端：
+     * - 客户端带 Range 且上游回 206：原样透传；
+     * - 客户端带 Range 但上游回 200（不支持/忽略 Range）：本地按 Range 切片返回 206，
+     *   越界返回 416；语法非法或无法确定总长时退回 200 全量透传；
+     * - 客户端无 Range：全量透传。
+     * Content-Disposition 的 attachment 统一改写为 inline，避免移动端浏览器当下载处理无法内联播放。
+     */
+    private void writeProxy(HttpResponse<InputStream> upstream, HttpServletResponse response,
+                            String clientRange) throws IOException {
+        boolean ranged = clientRange != null && !clientRange.isBlank();
+        long total = upstream.headers().firstValueAsLong("Content-Length").orElse(-1L);
+        boolean sliceable = ranged && upstream.statusCode() == 200
+                && total > 0 && !clientRange.contains(",");
+        if (sliceable) {
+            long[] r = parseRange(clientRange, total);
+            if (r == RANGE_UNSATISFIABLE) {
+                closeQuietly(upstream.body());
+                response.setStatus(HttpServletResponse.SC_REQUESTED_RANGE_NOT_SATISFIABLE);
+                response.setHeader("Content-Range", "bytes */" + total);
+                response.setContentLength(0);
+                return;
+            }
+            if (r != null) {
+                streamSlice(upstream, response, r[0], r[1], total);
+                return;
+            }
+            // Range 语法非法：按 RFC 应忽略该头，走 200 全量透传
+        }
+        passThrough(upstream, response, total);
+    }
+
+    /** 上游已按 Range 回 206（或无需分段）时原样透传 */
+    private void passThrough(HttpResponse<InputStream> upstream, HttpServletResponse response, long total) throws IOException {
         try (InputStream in = upstream.body()) {
             response.setStatus(upstream.statusCode());
             response.setContentType(upstream.headers().firstValue("Content-Type")
                     .filter(v -> !v.isBlank()).orElse("application/octet-stream"));
-            copyHeader(upstream, "Content-Length", v -> {
-                try {
-                    response.setContentLengthLong(Long.parseLong(v.trim()));
-                } catch (NumberFormatException ignore) {
-                    // 长度异常时交给容器按实际输出处理
-                }
-            });
+            if (total > 0) {
+                response.setContentLengthLong(total);
+            } else {
+                copyHeader(upstream, "Content-Length", v -> {
+                    try {
+                        response.setContentLengthLong(Long.parseLong(v.trim()));
+                    } catch (NumberFormatException ignore) {
+                        // 长度异常时交给容器按实际输出处理
+                    }
+                });
+            }
             copyHeader(upstream, "Content-Range", v -> response.setHeader("Content-Range", v));
-            copyHeader(upstream, "Accept-Ranges", v -> response.setHeader("Accept-Ranges", v));
+            if (total > 0) {
+                // 代理可对下一次 Range 请求本地切片，主动声明支持
+                response.setHeader("Accept-Ranges", "bytes");
+            } else {
+                copyHeader(upstream, "Accept-Ranges", v -> response.setHeader("Accept-Ranges", v));
+            }
             copyHeader(upstream, "ETag", v -> response.setHeader("ETag", v));
             copyHeader(upstream, "Last-Modified", v -> response.setHeader("Last-Modified", v));
-            copyHeader(upstream, "Content-Disposition", v -> response.setHeader("Content-Disposition", v));
+            copyHeader(upstream, "Content-Disposition", v -> response.setHeader("Content-Disposition", inlineDisposition(v)));
             OutputStream out = response.getOutputStream();
             in.transferTo(out);
             out.flush();
@@ -142,6 +184,107 @@ public class WebDavBrowseController {
             // 客户端中断或上游断流，响应已提交，仅记录
             log.debug("传输中断: {}", e.getMessage());
         }
+    }
+
+    /** 上游忽略 Range 时本地切片：跳过前 start 字节，仅输出请求长度，按 206 返回 */
+    private void streamSlice(HttpResponse<InputStream> upstream, HttpServletResponse response,
+                             long start, long end, long total) throws IOException {
+        long length = end - start + 1;
+        try (InputStream in = upstream.body()) {
+            response.setStatus(HttpServletResponse.SC_PARTIAL_CONTENT);
+            response.setContentType(upstream.headers().firstValue("Content-Type")
+                    .filter(v -> !v.isBlank()).orElse("application/octet-stream"));
+            response.setHeader("Accept-Ranges", "bytes");
+            response.setHeader("Content-Range", "bytes " + start + "-" + end + "/" + total);
+            response.setContentLengthLong(length);
+            skipFully(in, start);
+            OutputStream out = response.getOutputStream();
+            byte[] buf = new byte[64 * 1024];
+            long remaining = length;
+            while (remaining > 0) {
+                int n = in.read(buf, 0, (int) Math.min(buf.length, remaining));
+                if (n < 0) {
+                    break; // 上游提前断流，客户端拿到截断的 206 后会自行重试
+                }
+                out.write(buf, 0, n);
+                remaining -= n;
+            }
+            out.flush();
+        } catch (IOException e) {
+            log.debug("分段传输中断: {}", e.getMessage());
+        }
+    }
+
+    /** Content-Disposition 的 attachment 改写为 inline（保留文件名参数），其余原样返回 */
+    private String inlineDisposition(String value) {
+        if (value != null && value.trim().toLowerCase().startsWith("attachment")) {
+            return "inline" + value.trim().substring("attachment".length());
+        }
+        return value;
+    }
+
+    private void skipFully(InputStream in, long count) throws IOException {
+        long remaining = count;
+        while (remaining > 0) {
+            long n = in.skip(remaining);
+            if (n > 0) {
+                remaining -= n;
+            } else if (in.read() >= 0) { // skip 返回 0 时读 1 字节兜底推进
+                remaining--;
+            } else {
+                break;
+            }
+        }
+    }
+
+    private void closeQuietly(InputStream in) {
+        try {
+            if (in != null) {
+                in.close();
+            }
+        } catch (IOException ignore) {
+            // 关闭上游流失败无需处理
+        }
+    }
+
+    /**
+     * 解析单段 Range 头（bytes=start-end / bytes=start- / bytes=-suffix）。
+     * 返回 {start, end}（含端点）；语法非法返回 null（应忽略该头回 200）；
+     * 语法合法但越界返回 RANGE_UNSATISFIABLE（应回 416）。
+     */
+    private long[] parseRange(String header, long total) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("^bytes=(\\d*)-(\\d*)$").matcher(header.trim());
+        if (!m.matches()) {
+            return null;
+        }
+        String s = m.group(1), e = m.group(2);
+        if (s.isEmpty() && e.isEmpty()) {
+            return null; // "bytes=-" 非法
+        }
+        long start, end;
+        try {
+            if (s.isEmpty()) { // 后缀 bytes=-N：最后 N 字节
+                long suffix = Long.parseLong(e);
+                if (suffix <= 0) {
+                    return RANGE_UNSATISFIABLE;
+                }
+                start = Math.max(total - suffix, 0);
+                end = total - 1;
+            } else {
+                start = Long.parseLong(s);
+                end = e.isEmpty() ? total - 1 : Math.min(Long.parseLong(e), total - 1);
+            }
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+        if (start >= total) {
+            return RANGE_UNSATISFIABLE;
+        }
+        if (start > end) {
+            return null; // 起点大于终点视为非法，忽略该头
+        }
+        return new long[]{start, end};
     }
 
     private void copyHeader(HttpResponse<InputStream> from, String name, Consumer<String> setter) {
